@@ -7,16 +7,38 @@ import subprocess
 import os
 from scipy.signal import savgol_filter
 
-def extract_audio(input_video, output_audio):
-    ffmpeg.input(input_video).output(output_audio, ac=1, ar=22050).overwrite_output().run(quiet=True)
+def extract_audio(input_file, output_audio):
+    """Extract audio from any video/audio file format"""
+    try:
+        ffmpeg.input(input_file).output(output_audio, ac=1, ar=22050).overwrite_output().run(quiet=True)
+        return True
+    except Exception as e:
+        print(f"Error extracting audio: {e}")
+        return False
 
-def get_video_duration(path):
-    result = subprocess.run(
-        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT
-    )
-    return float(result.stdout)
+def get_media_duration(path):
+    """Get duration of any media file (audio or video)"""
+    try:
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True
+        )
+        return float(result.stdout.strip())
+    except Exception as e:
+        print(f"Error getting media duration: {e}")
+        return 0.0
+
+def is_audio_file(file_path):
+    """Check if the file is an audio file"""
+    audio_extensions = ['.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.wma']
+    return any(file_path.lower().endswith(ext) for ext in audio_extensions)
+
+def is_video_file(file_path):
+    """Check if the file is a video file"""
+    video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v']
+    return any(file_path.lower().endswith(ext) for ext in video_extensions)
 
 def extract_audio_features(audio_path, sr=22050, hop_length=512):
     y, sr = librosa.load(audio_path, sr=sr)
@@ -126,14 +148,52 @@ def determine_haptic_type(features, frame_idx):
 def smooth_data(data, window_length=11):
     return savgol_filter(data, window_length, 3)
 
-def main(mp4_path, json_path, fps=60):
-    audio_path = 'temp_audio.wav'
-    extract_audio(mp4_path, audio_path)
-    features = extract_audio_features(audio_path)
-    video_duration = get_video_duration(mp4_path)
-    n_frames = int(video_duration * fps)
+def main(input_file, json_path, fps=60):
+    # Check if input file exists
+    if not os.path.exists(input_file):
+        print(f"Error: Input file '{input_file}' does not exist.")
+        return
+    
+    # Check if input file is audio or video
+    if not (is_audio_file(input_file) or is_video_file(input_file)):
+        print(f"Error: '{input_file}' is not a supported audio or video file.")
+        print("Supported audio formats: .mp3, .wav, .flac, .aac, .ogg, .m4a, .wma")
+        print("Supported video formats: .mp4, .avi, .mov, .mkv, .wmv, .flv, .webm, .m4v")
+        return
+    
+    print(f"Processing {'audio' if is_audio_file(input_file) else 'video'} file: {input_file}")
+    
+    # Extract audio (or use directly if it's already audio)
+    if is_audio_file(input_file):
+        audio_path = input_file
+        temp_audio = False
+    else:
+        audio_path = 'temp_audio.wav'
+        temp_audio = True
+        if not extract_audio(input_file, audio_path):
+            print("Failed to extract audio from video file.")
+            return
+    
+    # Extract audio features
+    try:
+        features = extract_audio_features(audio_path)
+    except Exception as e:
+        print(f"Error extracting audio features: {e}")
+        if temp_audio and os.path.exists(audio_path):
+            os.remove(audio_path)
+        return
+    
+    # Get media duration
+    media_duration = get_media_duration(input_file)
+    if media_duration == 0.0:
+        print("Could not determine media duration.")
+        if temp_audio and os.path.exists(audio_path):
+            os.remove(audio_path)
+        return
+    
+    n_frames = int(media_duration * fps)
 
-    # Interpolation to cover the entire video
+    # Interpolation to cover the entire media
     rms_interp = np.interp(np.linspace(0, len(features['rms'])-1, n_frames), np.arange(len(features['rms'])), features['rms'])
     freqs_interp = np.interp(np.linspace(0, len(features['freqs'])-1, n_frames), np.arange(len(features['freqs'])), features['freqs'])
     rolloff_interp = np.interp(np.linspace(0, len(features['spectral_rolloff'])-1, n_frames), np.arange(len(features['spectral_rolloff'])), features['spectral_rolloff'])
@@ -149,8 +209,10 @@ def main(mp4_path, json_path, fps=60):
         "metadata": {
             "version": 3,
             "fps": fps,
-            "duration": round(video_duration, 2),
-            "total_frames": n_frames
+            "duration": round(media_duration, 2),
+            "total_frames": n_frames,
+            "input_file": os.path.basename(input_file),
+            "file_type": "audio" if is_audio_file(input_file) else "video"
         },
         "haptic_events": []
     }
@@ -188,8 +250,18 @@ def main(mp4_path, json_path, fps=60):
     with open(json_path, 'w') as f:
         json.dump(haptic_data, f, indent=2)
     print(f"JSON file generated: {json_path}")
-    if os.path.exists(audio_path):
+    print(f"Generated {len(haptic_data['haptic_events'])} haptic events")
+    
+    # Clean up temporary audio file
+    if temp_audio and os.path.exists(audio_path):
         os.remove(audio_path)
 
 if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        print("Usage: python haptick_analyze.py <input_file> <output.json>")
+        print("Supported formats:")
+        print("  Audio: .mp3, .wav, .flac, .aac, .ogg, .m4a, .wma")
+        print("  Video: .mp4, .avi, .mov, .mkv, .wmv, .flv, .webm, .m4v")
+        sys.exit(1)
+    
     main(sys.argv[1], sys.argv[2])
