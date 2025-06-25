@@ -5,10 +5,29 @@ A Python tool that analyzes video/audio content and generates haptic feedback pa
 ## Features
 
 - **Multi-Format Support**: Accepts any audio or video file format supported by FFmpeg
+- **Audio Normalization**: Ensures consistent results between audio and video files
 - **Audio Analysis**: Extracts RMS, spectral centroid, rolloff, and bandwidth from audio
 - **Haptic Classification**: Classifies sounds into different haptic feedback types
 - **iOS Integration**: Generates JSON files compatible with iOS haptic feedback systems
 - **Multiple Haptic Types**: Supports all iOS haptic feedback types (impact and notification)
+
+## Audio Processing
+
+### Normalization
+The tool automatically normalizes all audio to a standard RMS level (0.1) to ensure consistent haptic feedback generation regardless of the source file's volume level. This means:
+
+- Audio files and their corresponding video files will produce identical haptic patterns
+- Loud and quiet files are analyzed on the same scale
+- The normalization factor is included in the output metadata for reference
+
+### Consistency
+All files (audio and video) go through the same audio extraction and normalization process:
+1. Extract/convert audio to WAV format (22050Hz, mono)
+2. Normalize to standard RMS level
+3. Analyze audio features
+4. Generate haptic events
+
+This ensures that `song.mp3` and `song.mp4` (containing the same audio) will produce nearly identical haptic patterns.
 
 ## Supported File Formats
 
@@ -99,7 +118,10 @@ The tool generates a JSON file with the following structure:
     "duration": 120.5,
     "total_frames": 7230,
     "input_file": "example.mp3",
-    "file_type": "audio"
+    "file_type": "audio",
+    "media_duration": 120.5,
+    "audio_duration": 120.47,
+    "normalization_factor": 2.4567
   },
   "haptic_events": [
     {
@@ -121,10 +143,13 @@ The tool generates a JSON file with the following structure:
 ### Metadata Properties
 - `version`: JSON format version
 - `fps`: Frames per second used for analysis
-- `duration`: Total duration of the media file
+- `duration`: Total duration used for analysis
 - `total_frames`: Total number of frames analyzed
 - `input_file`: Original filename
 - `file_type`: "audio" or "video"
+- `media_duration`: Duration from the original file
+- `audio_duration`: Duration from the extracted audio
+- `normalization_factor`: Audio level adjustment factor applied
 
 ## Detection Logic
 
@@ -194,6 +219,12 @@ BASS_FREQ_THRESHOLD = 200      # Hz
 HIGH_FREQ_THRESHOLD = 2000     # Hz
 TRANSITION_THRESHOLD = 0.4     # Intensity change
 RIGID_BANDWIDTH_THRESHOLD = 0.7 # Spectral bandwidth
+```
+
+You can also modify the audio normalization level in `extract_audio_features()`:
+
+```python
+target_rms = 0.1  # Standard RMS level for normalization
 ```
 
 ## Requirements

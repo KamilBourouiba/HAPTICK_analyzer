@@ -43,6 +43,12 @@ def is_video_file(file_path):
 def extract_audio_features(audio_path, sr=22050, hop_length=512):
     y, sr = librosa.load(audio_path, sr=sr)
     
+    # Normalize audio to standard RMS level for consistency
+    target_rms = 0.1  # Standard RMS level
+    current_rms = np.sqrt(np.mean(y**2))
+    if current_rms > 0:
+        y = y * (target_rms / current_rms)
+    
     # Basic characteristics
     rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
     freqs = librosa.feature.spectral_centroid(y=y, sr=sr, hop_length=hop_length)[0]
@@ -75,7 +81,8 @@ def extract_audio_features(audio_path, sr=22050, hop_length=512):
         'spectral_bandwidth': spectral_bandwidth,
         'onset_env': onset_env,
         'onset_frames': onset_frames,
-        'duration': librosa.get_duration(y=y, sr=sr)
+        'duration': librosa.get_duration(y=y, sr=sr),
+        'normalization_factor': target_rms / current_rms if current_rms > 0 else 1.0
     }
 
 def determine_haptic_type(features, frame_idx):
@@ -163,16 +170,13 @@ def main(input_file, json_path, fps=60):
     
     print(f"Processing {'audio' if is_audio_file(input_file) else 'video'} file: {input_file}")
     
-    # Extract audio (or use directly if it's already audio)
-    if is_audio_file(input_file):
-        audio_path = input_file
-        temp_audio = False
-    else:
-        audio_path = 'temp_audio.wav'
-        temp_audio = True
-        if not extract_audio(input_file, audio_path):
-            print("Failed to extract audio from video file.")
-            return
+    # Always extract/normalize audio to ensure consistency
+    audio_path = 'temp_audio.wav'
+    temp_audio = True
+    
+    if not extract_audio(input_file, audio_path):
+        print("Failed to extract/normalize audio from file.")
+        return
     
     # Extract audio features
     try:
@@ -183,7 +187,7 @@ def main(input_file, json_path, fps=60):
             os.remove(audio_path)
         return
     
-    # Get media duration
+    # Get media duration from the original file for accuracy
     media_duration = get_media_duration(input_file)
     if media_duration == 0.0:
         print("Could not determine media duration.")
@@ -191,7 +195,13 @@ def main(input_file, json_path, fps=60):
             os.remove(audio_path)
         return
     
-    n_frames = int(media_duration * fps)
+    # Use audio duration if it's more accurate
+    audio_duration = features['duration']
+    final_duration = min(media_duration, audio_duration) if abs(media_duration - audio_duration) > 0.1 else media_duration
+    
+    print(f"Media duration: {media_duration:.2f}s, Audio duration: {audio_duration:.2f}s, Using: {final_duration:.2f}s")
+    
+    n_frames = int(final_duration * fps)
 
     # Interpolation to cover the entire media
     rms_interp = np.interp(np.linspace(0, len(features['rms'])-1, n_frames), np.arange(len(features['rms'])), features['rms'])
@@ -209,10 +219,13 @@ def main(input_file, json_path, fps=60):
         "metadata": {
             "version": 3,
             "fps": fps,
-            "duration": round(media_duration, 2),
+            "duration": round(final_duration, 2),
             "total_frames": n_frames,
             "input_file": os.path.basename(input_file),
-            "file_type": "audio" if is_audio_file(input_file) else "video"
+            "file_type": "audio" if is_audio_file(input_file) else "video",
+            "media_duration": round(media_duration, 2),
+            "audio_duration": round(audio_duration, 2),
+            "normalization_factor": round(features['normalization_factor'], 4)
         },
         "haptic_events": []
     }
